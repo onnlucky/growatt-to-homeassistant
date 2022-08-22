@@ -1,0 +1,14 @@
+[Unit]
+Description=Growatt inverter data to Home Assistant
+After=network.target
+
+[Service]
+Restart=always
+RestartSec=10
+User=homeassistant
+WorkingDirectory=/srv/homeassistant/growatt-to-homeassistant/
+Environment=NODE_ENV=production
+ExecStart=node growatt.js
+
+[Install]
+WantedBy=multi-user.target

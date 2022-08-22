@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "baseUrl": "src",
+        "rootDir": "src",
+        "outDir": "dist",
+        "alwaysStrict": true,
+
+        "esModuleInterop": true,
+        "target": "es6",
+        "module": "commonjs",
+        "moduleResolution": "node",
+
+        // "noImplicitAny": true,
+        "strictNullChecks": true,
+        "noImplicitThis": true,
+        "sourceMap": true,
+        "allowJs": true
+    },
+    "exclude": ["node_modules", "dist", "jest.config.js"],
+    "filesGlob": ["**/*.ts"]
+}
