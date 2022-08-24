@@ -2,23 +2,22 @@
     "name": "growatt-server",
     "version": "0.0.1",
     "description": "A server to capture growatt data locally.",
-    "main": "dist/index.js",
+    "main": "dist/growatt.js",
     "author": "Onne Gorter",
     "license": "MIT",
     "scripts": {
-        "start": "node dist/index.js",
-        "dev": "nodemon -i dist -e ts -x 'tsc && node dist/index.js'"
+        "start": "node dist/growatt.js",
+        "dev": "nodemon -i dist -e ts -x 'tsc && node dist/growatt.js'"
     },
     "devDependencies": {
         "@types/debug": "^4",
         "@types/node": "^13",
-        "binary-parser": "^2.1.0",
-        "homeassistant": "^0.2.0",
-        "typescript": "^3.7"
+        "typescript": "^4"
     },
     "dependencies": {
-        "@abandonware/noble": "^1.9.2-9",
-        "debug": "^4"
+        "binary-parser": "^2.1.0",
+        "debug": "^4",
+        "homeassistant": "^0.2.0"
     },
     "prettier": {
         "tabWidth": 4,
