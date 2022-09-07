@@ -3,7 +3,7 @@ import * as path from "path"
 import * as net from "net"
 import Debug from "debug"
 import { Parser } from "binary-parser"
-import { mqtt_setup, mqtt_report, mqtt_write_discovery, mqtt_uptime } from "./mqtt"
+import { mqtt_setup, mqtt_report, mqtt_setup_discovery, mqtt_uptime } from "./mqtt"
 
 /* A local server to capture Growatt inverter data via wifi.
  *
@@ -25,17 +25,17 @@ import { mqtt_setup, mqtt_report, mqtt_write_discovery, mqtt_uptime } from "./mq
  * Installing growatt-to-homeassistant:
  * - run `make install`
  * - optionally: create a /home/homeassistant/growatt-to-homeassistant.config.json fill in the mqtt
- *   "host", "username", and "password".
+ *   "host", "port", "username", "password", and set the listen port via "growatt_port".
  * */
 
 const SECONDS = 1000
 const MINUTES = 60 * SECONDS
 
-export const log = {
-    trace: Debug("growatt:trace"),
-    debug: Debug("growatt:debug"),
-    error: Debug("growatt:error"),
-}
+export const log = Debug("growatt")
+
+process.on("uncaughtException", (err) => {
+    console.warn("uncaughtException:", err)
+})
 
 let lastValueReceived = Date.now()
 let lastValueReceivedPerDevice = new Map<string, number>()
@@ -60,7 +60,8 @@ setInterval(() => {
     // Reset values after 10 minutes of no activity.
     for (const [device, lastTime] of lastValueReceivedPerDevice.entries()) {
         if (Date.now() - lastTime > 10 * MINUTES) {
-            mqtt_report(device, { kWhToday: 0, Ppv: 0 })
+            console.log("device", device, "offline; reporting zeros")
+            mqtt_report(device, { kWhToday: 0, Ppv: 0, status: "offline" })
             lastValueReceivedPerDevice.delete(device)
         }
     }
@@ -364,82 +365,89 @@ export function parseGrowattMessage(data: Buffer): {
     return message
 }
 
-export function startGrowattServer(port = 5279) {
-    net.createServer((socket) => {
-        console.log("have client ...", socket.remoteAddress)
+function processMessage(data: Buffer, socket: net.Socket) {
+    const msg = parseGrowattMessage(data)
+    log("msg:", msg)
 
-        socket.on("close", (hadError) => {
-            log.debug("client closed:", hadError ? "hadError" : "ok")
-        })
+    if (msg.type === MessageTypes.PING) {
+        log("sending ping")
+        socket.write(data)
+    } else if (msg.type === MessageTypes.ANNOUNCE) {
+        log("sending announce ack")
+        const reply = create(msg.counter, msg.protocolVersion, msg.type, Buffer.from([0x0]))
+        socket.write(reply)
+    } else {
+        // this is a normal data packet, send ACK 04 packet back
+        log("sending generic ack")
+        socket.write(Buffer.from("000100020003010400", "hex"))
+    }
 
-        socket.on("data", (data) => {
-            const msg = parseGrowattMessage(data)
-            log.trace("msg:", msg)
-
-            if (msg.type === MessageTypes.PING) {
-                log.trace("sending ping")
-                socket.write(data)
-            } else if (msg.type === MessageTypes.ANNOUNCE) {
-                log.trace("sending announce ack")
-                const reply = create(msg.counter, msg.protocolVersion, msg.type, Buffer.from([0x0]))
-                socket.write(reply)
-            } else {
-                // this is a normal data packet, send ACK 04 packet back
-                log.trace("sending generic ack")
-                socket.write(Buffer.from("000100020003010400", "hex"))
-            }
-
-            const device = msg.decoded?.wifiSerial
-            if (msg.type === MessageTypes.DATA) {
-                if (typeof device !== "string") throw Error("data message without a device: '" + device + "'")
-                trackDevice(device)
-
-                const { Ppv, kWhToday, kWhTotal, temp } = msg.decoded
-                const status = statusFromPayload(msg.decoded.status)
-
-                console.log("msg:", status, "ppv", Ppv, "today", kWhToday, "total", kWhTotal, "temp", temp)
-                try {
-                mqtt_report(device, { status, kWhToday, kWhTotal, Ppv, temperature: temp })
-                mqtt_write_discovery(device, {
-                    status: {
-                        entity_category: "diagnostic",
-                        name: "Inverter Status",
-                    },
-                    kWhToday: {
-                        unit_of_measurement: "kWh",
-                        state_class: "total_increasing",
-                        device_class: "energy",
-                        name: "Solar Energy Produced Today",
-                    },
-                    kWhTotal: {
-                        unit_of_measurement: "kWh",
-                        state_class: "total_increasing",
-                        device_class: "energy",
-                        name: "Total Solar Energy Produced",
-                    },
-                    Ppv: {
-                        unit_of_measurement: "W",
-                        state_class: "measurement",
-                        device_class: "power",
-                        name: "Solar Power Output",
-                    },
-                    temperature: {
-                        unit_of_measurement: "C",
-                        state_class: "measurement",
-                        name: "Solar Inverter Internal Temperature",
-                    },
-                })
-                } catch (e) {
-                console.warn(e)
-                }
-            }
-        })
-    }).listen(port)
-    console.log("started growatt server, port:", port)
+    if (msg.type === MessageTypes.DATA) {
+        processNewData(msg.decoded)
+    }
 }
 
-process.on("uncaughtException", (err) => {
-    log.error("uncaughtException:", err)
+function processNewData(decoded: any) {
+    const device = decoded.wifiSerial
+    if (typeof device !== "string") throw Error("data message without a device: '" + device + "'")
+    trackDevice(device)
+
+    const { Ppv, kWhToday, kWhTotal, temp } = decoded
+    const status = statusFromPayload(decoded.status)
+
+    console.log("msg:", status, "ppv", Ppv, "today", kWhToday, "total", kWhTotal, "temp", temp)
+    mqtt_report(device, { status, kWhToday, kWhTotal, Ppv, temperature: temp })
+    mqtt_setup_discovery(device, {
+        status: {
+            entity_category: "diagnostic",
+            name: "Inverter Status",
+        },
+        kWhToday: {
+            unit_of_measurement: "kWh",
+            state_class: "total_increasing",
+            device_class: "energy",
+            name: "Solar Energy Produced Today",
+        },
+        kWhTotal: {
+            unit_of_measurement: "kWh",
+            state_class: "total_increasing",
+            device_class: "energy",
+            name: "Total Solar Energy Produced",
+        },
+        Ppv: {
+            unit_of_measurement: "W",
+            state_class: "measurement",
+            device_class: "power",
+            name: "Solar Power Output",
+        },
+        temperature: {
+            unit_of_measurement: "C",
+            state_class: "measurement",
+            name: "Solar Inverter Internal Temperature",
+        },
+    })
+}
+
+const server = net.createServer((socket) => {
+    log("have client:", socket.remoteAddress)
+
+    socket.on("error", (error) => {
+        console.warn("socket error:", error)
+    })
+
+    socket.on("close", (hadError) => {
+        log("client closed: ", hadError ? "hadError" : "ok")
+    })
+
+    socket.on("data", (data) => {
+        try {
+            processMessage(data, socket)
+        } catch (e) {
+            console.warn(e)
+        }
+    })
 })
 
-startGrowattServer()
+const port = config.growatt_port ?? 5279
+server.listen(port)
+console.log("started growatt server, port:", port)

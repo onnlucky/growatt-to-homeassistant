@@ -1,10 +1,11 @@
 import { connect, MqttClient } from "mqtt"
+import { log } from "./growatt"
 
 let mqtt: MqttClient | undefined
 
 export function mqtt_setup(config: any) {
     const mqttUrl = `mqtt://${config.host || "localhost"}${config.port ? ":" + config.port : ""}`
-    console.log("trying to connect to mqtt:", mqttUrl)
+    log("trying to connect to mqtt:", mqttUrl)
 
     mqtt = connect(mqttUrl, {
         clientId: "growatt_" + Math.random().toString(16).slice(3),
@@ -20,18 +21,18 @@ export function mqtt_setup(config: any) {
     })
 
     mqtt.on("error", (error) => {
-        console.log("mqtt error:", error)
+        console.warn("mqtt error:", error)
     })
 
     mqtt.on("connect", () => {
-        console.log("connected")
+        console.log("mqtt connected")
         mqtt?.subscribe(["growatt/config"], () => {
-            console.log("subscribed")
+            log("subscribed")
         })
     })
 
     mqtt.on("message", (topic, payload) => {
-        console.log("mqtt:", topic, payload)
+        log("mqtt:", topic, payload)
     })
 }
 
@@ -53,7 +54,7 @@ const SECONDS = 1000
 const MINUTES = 60 * SECONDS
 
 const discoveryWritten = new Map<string, number>()
-export function mqtt_write_discovery(device: string, keyValue: Record<string, any>) {
+export function mqtt_setup_discovery(device: string, keyValue: Record<string, any>) {
     if (!mqtt?.connected) return
 
     const lastWrite = discoveryWritten.get(device)
