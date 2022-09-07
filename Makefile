@@ -1,4 +1,4 @@
-dist/growatt.js: src/growatt.ts package.json tsconfig.json Makefile
+dist/growatt.js dist/mqtt.js: src/growatt.ts src/mqtt.ts package.json tsconfig.json Makefile
 	yarn
 	rm -rf dist/*
 	tsc
@@ -18,3 +18,6 @@ install: dist/growatt.js
 	sudo systemctl enable growatt-to-homeassistant
 	sleep 1
 	systemctl status growatt-to-homeassistant
+
+tail:
+	journalctl -n 100 -f -u growatt-to-homeassistant.service

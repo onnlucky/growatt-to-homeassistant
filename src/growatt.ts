@@ -397,37 +397,41 @@ export function startGrowattServer(port = 5279) {
                 const { Ppv, kWhToday, kWhTotal, temp } = msg.decoded
                 const status = statusFromPayload(msg.decoded.status)
 
-                console.log(Date().toString(), "msg:", { status, Ppv, kWhToday, kWhTotal, temp })
+                console.log("msg:", status, "ppv", Ppv, "today", kWhToday, "total", kWhTotal, "temp", temp)
+                try {
                 mqtt_report(device, { status, kWhToday, kWhTotal, Ppv, temperature: temp })
                 mqtt_write_discovery(device, {
                     status: {
                         entity_category: "diagnostic",
-                        friendly_name: "Inverter Status",
+                        name: "Inverter Status",
                     },
                     kWhToday: {
                         unit_of_measurement: "kWh",
                         state_class: "total_increasing",
                         device_class: "energy",
-                        friendly_name: "Solar Energy Produced Today",
+                        name: "Solar Energy Produced Today",
                     },
                     kWhTotal: {
                         unit_of_measurement: "kWh",
                         state_class: "total_increasing",
                         device_class: "energy",
-                        friendly_name: "Total Solar Energy Produced",
+                        name: "Total Solar Energy Produced",
                     },
                     Ppv: {
                         unit_of_measurement: "W",
                         state_class: "measurement",
                         device_class: "power",
-                        friendly_name: "Solar Power Output",
+                        name: "Solar Power Output",
                     },
                     temperature: {
                         unit_of_measurement: "C",
                         state_class: "measurement",
-                        friendly_name: "Solar Inverter Internal Temperature",
+                        name: "Solar Inverter Internal Temperature",
                     },
                 })
+                } catch (e) {
+                console.warn(e)
+                }
             }
         })
     }).listen(port)

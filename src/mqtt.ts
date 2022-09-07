@@ -45,7 +45,7 @@ export function mqtt_report(device: string, keyValue: Record<string, any>) {
 
     const path = `growatt/${device}/`
     for (const key in keyValue) {
-        mqtt.publish(path + key, keyValue[key], { retain: true })
+        mqtt.publish(path + key, String(keyValue[key]), { retain: true })
     }
 }
 
@@ -69,6 +69,7 @@ export function mqtt_write_discovery(device: string, keyValue: Record<string, an
                 ...keyValue[key],
                 uniq_id: `growatt_${device}_${key}`,
                 stat_t: `growatt/${device}/${key}`,
+                object_id: `growatt_${device}_${key.toLowerCase()}`,
                 dev: {
                     ids: [`growatt_${device}`],
                     name: `Growatt Inverter ${device}`,
