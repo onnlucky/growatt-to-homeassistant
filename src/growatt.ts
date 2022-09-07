@@ -3,12 +3,11 @@ import * as path from "path"
 import * as net from "net"
 import Debug from "debug"
 import { Parser } from "binary-parser"
-import { default as HomeAssistant } from "homeassistant"
+import { mqtt_setup, mqtt_report, mqtt_write_discovery, mqtt_uptime } from "./mqtt"
 
 /* A local server to capture Growatt inverter data via wifi.
  *
- * Setup:
- *
+ * Setup the growatt inverter (requires a growatt inverter with a wifi dongle):
  * - First put wifi adaptor into AP mode:
  *   - Remove the rubber plug often labelled "key".
  *   - Short press the button underneath, the led should glow solid blue.
@@ -18,13 +17,19 @@ import { default as HomeAssistant } from "homeassistant"
  *   - The login is admin/admin, or admin/12345678
  * - Configure the server the wifi adaptor should log to.
  *   - Point it to the ip:port where this script will be running.
- *   - Optional: configure wifi to join or other settings
+ *   - Configure wifi to join.
+ *   - Optional: tweak other settings.
  * - After clicking apply, the wifi adaptor will ask to restart, doing so will have it start
  *   connecting to this script and sending data.
  *
- * On the home assistant side, generate a long lived token. Configure the home automation
- * server:port, token, and entity name.
+ * Installing growatt-to-homeassistant:
+ * - run `make install`
+ * - optionally: create a /home/homeassistant/growatt-to-homeassistant.config.json fill in the mqtt
+ *   "host", "username", and "password".
  * */
+
+const SECONDS = 1000
+const MINUTES = 60 * SECONDS
 
 export const log = {
     trace: Debug("growatt:trace"),
@@ -32,15 +37,42 @@ export const log = {
     error: Debug("growatt:error"),
 }
 
-let config = {}
+let lastValueReceived = Date.now()
+let lastValueReceivedPerDevice = new Map<string, number>()
+
+function trackDevice(device: string) {
+    lastValueReceived = Date.now()
+    lastValueReceivedPerDevice.set(device, lastValueReceived)
+}
+
+let config: any = {}
+
 try {
-    const file = path.join(process.env.HOME || "/home/homeassistant", ".homeassistant", "growatt-to-homeassistant.json")
-    config = JSON.parse(fs.readFileSync(file, {encoding: "utf8"}))
+    const file = path.join(process.env.HOME || "/home/homeassistant", "growatt-to-homeassistant.config.json")
+    config = JSON.parse(fs.readFileSync(file, { encoding: "utf8" }))
 } catch (e) {
     console.warn("failed to read config:", e.message)
 }
 
-const hass = new HomeAssistant(config)
+mqtt_setup(config)
+
+setInterval(() => {
+    // Reset values after 10 minutes of no activity.
+    for (const [device, lastTime] of lastValueReceivedPerDevice.entries()) {
+        if (Date.now() - lastTime > 10 * MINUTES) {
+            mqtt_report(device, { kWhToday: 0, Ppv: 0 })
+            lastValueReceivedPerDevice.delete(device)
+        }
+    }
+
+    // Exit the server after an hour of no activity. Should get restarted by init system.
+    if (Date.now() - lastValueReceived > 60 * MINUTES) {
+        console.log("exiting due to zero activity")
+        process.exit(0)
+    }
+
+    mqtt_uptime()
+}, 5000)
 
 function divideBy10(data: number): number {
     return data / 10
@@ -124,6 +156,13 @@ const AnnouncePayloadParser = new Parser()
     .skip(62)
     .string("make", { length: 20 })
     .string("type", { length: 8 })
+
+function statusFromPayload(status: number): string {
+    if (status === 0) return "waiting"
+    if (status === 1) return "normal"
+    if (status === 2) return "fault"
+    return "unknown"
+}
 
 const DataPayloadParser = new Parser()
     .string("wifiSerial", { length: 10 })
@@ -332,6 +371,7 @@ export function startGrowattServer(port = 5279) {
         socket.on("close", (hadError) => {
             log.debug("client closed:", hadError ? "hadError" : "ok")
         })
+
         socket.on("data", (data) => {
             const msg = parseGrowattMessage(data)
             log.trace("msg:", msg)
@@ -349,54 +389,45 @@ export function startGrowattServer(port = 5279) {
                 socket.write(Buffer.from("000100020003010400", "hex"))
             }
 
-            const serial = msg.decoded?.wifiSerial
-
+            const device = msg.decoded?.wifiSerial
             if (msg.type === MessageTypes.DATA) {
-                const { status, Ppv, kWhToday, kWhTotal, temp } = msg.decoded
-                console.log("msg:", { Ppv, kWhToday, kWhTotal, temp }, Date.now())
-                hass.states
-                    .update("sensor", "growatt_inverter_" + serial + "_kWhToday", {
-                        state: kWhToday,
-                        attributes: {
-                            unit_of_measurement: "kWh",
-                            state_class: "total_increasing",
-                            device_class: "energy",
-                            friendly_name: "Solar Energy Produced Today",
-                        },
-                    })
-                    .catch((err) => log.error(err))
-                hass.states
-                    .update("sensor", "growatt_inverter_" + serial + "_kWhTotal", {
-                        state: kWhTotal,
-                        attributes: {
-                            unit_of_measurement: "kWh",
-                            state_class: "total_increasing",
-                            device_class: "energy",
-                            friendly_name: "Total Solar Energy Produced",
-                        },
-                    })
-                    .catch((err) => log.error(err))
-                hass.states
-                    .update("sensor", "growatt_inverter_" + serial + "_Ppv", {
-                        state: Ppv,
-                        attributes: {
-                            unit_of_measurement: "W",
-                            state_class: "measurement",
-                            device_class: "power",
-                            friendly_name: "Solar Power Output",
-                        },
-                    })
-                    .catch((err) => log.error(err))
-                hass.states
-                    .update("sensor", "growatt_inverter_" + serial + "_temperature", {
-                        state: temp,
-                        attributes: {
-                            unit_of_measurement: "C",
-                            state_class: "measurement",
-                            friendly_name: "Solar Inverter Internal Temperature",
-                        },
-                    })
-                    .catch((err) => log.error(err))
+                if (typeof device !== "string") throw Error("data message without a device: '" + device + "'")
+                trackDevice(device)
+
+                const { Ppv, kWhToday, kWhTotal, temp } = msg.decoded
+                const status = statusFromPayload(msg.decoded.status)
+
+                console.log(Date().toString(), "msg:", { status, Ppv, kWhToday, kWhTotal, temp })
+                mqtt_report(device, { status, kWhToday, kWhTotal, Ppv, temperature: temp })
+                mqtt_write_discovery(device, {
+                    status: {
+                        entity_category: "diagnostic",
+                        friendly_name: "Inverter Status",
+                    },
+                    kWhToday: {
+                        unit_of_measurement: "kWh",
+                        state_class: "total_increasing",
+                        device_class: "energy",
+                        friendly_name: "Solar Energy Produced Today",
+                    },
+                    kWhTotal: {
+                        unit_of_measurement: "kWh",
+                        state_class: "total_increasing",
+                        device_class: "energy",
+                        friendly_name: "Total Solar Energy Produced",
+                    },
+                    Ppv: {
+                        unit_of_measurement: "W",
+                        state_class: "measurement",
+                        device_class: "power",
+                        friendly_name: "Solar Power Output",
+                    },
+                    temperature: {
+                        unit_of_measurement: "C",
+                        state_class: "measurement",
+                        friendly_name: "Solar Inverter Internal Temperature",
+                    },
+                })
             }
         })
     }).listen(port)
