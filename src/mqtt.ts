@@ -76,7 +76,8 @@ export function mqtt_setup_discovery(device: string, keyValue: Record<string, an
                     name: `Growatt Inverter ${device}`,
                     mf: "Growatt",
                 },
-            })
+            }),
+            { retain: true }
         )
     }
 }
